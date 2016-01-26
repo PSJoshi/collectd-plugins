@@ -1,0 +1,127 @@
+#!/usr/bin/env python
+
+import collectd
+import subprocess
+import re
+import traceback
+import os
+
+GREP_BIN = '/bin/grep'
+
+php_security_parameters = [
+    # reference - http://www.cyberciti.biz/tips/php-security-best-practices-tutorial.html
+    # Restrict PHP information leakage:expose_php=off
+    expose_php,
+    # display of PHP errors:display_errors=off
+    display_errors,
+    # log PHP errors:log_errors=on
+    log_errors,
+    #disallow file uploading:file_uploads=off
+    file_uploads,
+    #If file uploading is allowed, restrict file size:upload_max_filesize=1M - 1MB.
+    upload_max_filesize,
+    # turn off remote code execution:allow_url_fopen=off,allow_url_include=off
+    allow_url_fopen,
+    allow_url_include,
+    # enable SQL safe mode:sql.safe_mode=on
+    sql.safe_mode,
+    # turn off gpc magic quotes
+    #Magic Quotes is a process that automagically escapes incoming data to the PHP script.
+    # It's preferred to code with magic quotes off and to instead escape the data at runtime
+    magic_quotes_gpc,
+    # Control POST size
+    post_max_size,
+    # Resource control - DoS 
+    #max_execution_time =  30
+    #max_input_time = 30
+    #memory_limit = 40M
+    max_execution_time,
+    max_input_time,
+    memory_limit,
+    #session cookies: http://php.net/session.cookie-secure
+    session.cookie_secure,
+    # session cookie: http://php.net/session.cookie-httponly
+    session.cookie_httponly,
+    # Disable dangerous functions: :['exec','passthru','shell_exec','system','proc_open','popen','curl_exec','curl_multi_exec','parse_ini_file','show_source']
+    disable_functions,
+    # Limits the PHP process from accessing files outside of specifically designated directories such as /var/www/html/
+    open_basedir,
+]
+
+def subprocess_response(security_parameter):
+
+    # initialize arguments to subprocess
+    args = [GREP_BIN,'-i',security_parameter,php_ini_file]
+    try:
+        process_php_config = subprocess.Popen(args, shell=False, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        return process_php_config.communicate()[0]
+    except Exception as exc:
+        collectd.error("Error while getting subprocess response - %s : %s" % (exc, traceback.format_exc()))
+        return None
+
+
+def get_php_security_parameters():
+
+    settings_dict = dict()
+
+    if not os.path.exists(GREP_BIN):
+        collectd.error("No %s program is found on the system" % GREP_BIN)
+        return settings_dict
+    # find response for each sysctl parameter
+    for parameter in php_security_parameters:
+        collectd.info("Checking PHP configuration parameter  - %s" %parameter)
+        response = subprocess_response(parameter)
+        collectd.info(" Present PHP security parameter: %s  is set as : %s" %(parameter, response))
+        # convert security settings like on/off into boolean. If  the parameter is not set (commented), assume it to be False
+        # add desired php security settings dict later on. At the moment, just return present setting
+        # present setting = desired security settings, then parameter is 1
+        # present setting != desired security settings, then parameter is 0
+
+        if response and response.find(';') >= 0
+        # if PHP security parameter is commented
+            r = response.strip().split('=')
+            settings_dict.update(
+                {
+                    r[0].strip()[1:]: 0
+                })
+        elif response and response.find("=") > 0:
+            r = response.strip().split('=')
+            # PHP security parameters - on/ off type
+            if r[1].lower() in ['on','off']:
+                cur_resp = lambda x: 0 if x.lower() == 'off' else 1
+                settings_dict.update({r[0].strip(): cur_resp(r[1])})
+            else:
+                # PHP parameter not set.
+                settings_dict.update(
+                {
+                    r[0].strip(): 0
+                })
+   
+
+    return settings_dict
+
+
+def configure_callback(conf):
+    pass
+
+def read_callback():
+
+    # get vmstat information
+    info = get_stats()
+    if not info:
+        collectd.error("No PHP security parameters information received!!")
+        return
+
+    for key in info:
+        collectd.info("Dispatching %s : %i" % (key, info[key]))
+
+        val = collectd.Values(plugin='php_security')
+        val.type = 'gauge'
+        val.type_instance = key
+        val.values = [info[key]]
+        val.dispatch()
+
+collectd.register_config(configure_callback)
+collectd.register_read(read_callback)
+
